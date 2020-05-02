@@ -10,9 +10,7 @@ from torch.autograd import Variable
 class Encoder(nn.Module):
     def __init__(self, dim_in, dim_out, conv_layers, pool_layers, ff_layers, conv_activation=None, ff_activation=None): 
         super(Encoder, self).__init__()
-        self.m = enc
-
-        self.dim_int = dim_in
+        self.dim_in = dim_in
         self.dim_out = dim_out
 
         self.conv_layers = conv_layers
@@ -25,6 +23,7 @@ class Encoder(nn.Module):
         self.ff_activation = ff_activation
 
     def forward(self, x):
+        # First compute convolutional pass
         for ii in range(0,len(self.conv_layers)):
             x = self.conv_layers[ii](x)
             if self.conv_activation:
@@ -32,22 +31,42 @@ class Encoder(nn.Module):
             if self.pool_layers[ii]:
                 x = self.pool_layers[ii](x)
 
+        # Flatten output and compress
         x = torch.flatten(x,start_dim=1)
         for ii in range(0,len(self.ff_layers)-1):
             x = self.ff_layers[ii](x)
             if self.ff_activation:
-                x = self.ff_activation(x)
+                x = self.ff_activation(x) 
         return x.chunk(2, dim=1)
 
 class Decoder(nn.Module):
-    def __init__(self, dec, dim_in): 
+    def __init__(self, dim_in, dim_out, ff_layers, conv_layers, ff_activation=None, conv_activation=None): 
         super(Decoder, self).__init__()
-        self.m = dec
         self.dim_in = dim_in
+        self.dim_out = dim_out
+
+        self.ff_layers = self.ff_layers
+        self.conv_layers = self.conv_layers
+
+        self.ff_activation = ff_activation
+        self.conv_activation = self.conv_activation
 
     def forward(self, z):
-        return self.m(z)
+        # First compute feedforward passes
+        for ii in range(0,len(self.ff_layers)-1):
+            x = self.ff_layers[ii](x)
+            if self.ff_activation:
+                x = self.ff_activation(x)
 
+        # Deconvolutional passes
+        # TODO(acauligi): reshape vector into tensor
+        for ii in range(0,len(self.conv_layers)):
+            x = self.conv_layers[ii](x)
+            if self.conv_activation:
+                x = self.conv_activation(x)
+            if self.pool_layers[ii]:
+                x = self.pool_layers[ii](x)
+        return x
 
 class Transition(nn.Module):
     def __init__(self, trans, dim_z, dim_u):
@@ -86,10 +105,14 @@ class BallEncoder(Encoder):
     def __init__(self, dim_in, dim_z, channels, ff_shape, conv_activation, ff_activation, stride, padding, pool): 
         conv_layers = []
         pool_layers = []
+        ff_layers = []
+
         W, H = input_size
         for ii in range(0,len(channels)-1):
             conv_layers.append(torch.nn.Conv2d(channels[ii], channels[ii+1], kernel[ii],
                 stride=stride[ii], padding=padding[ii]))
+
+            # Keep track of output image size
             W = int(1+(W - kernel[ii] +2*padding[ii])/stride[ii])
             H = int(1+(H - kernel[ii] +2*padding[ii])/stride[ii])
             if pool[ii]:
@@ -104,8 +127,8 @@ class BallEncoder(Encoder):
 
         shape = np.concatenate(([cnn_output_size], ff_shape))
         for ii in range(0,len(shape)-1):
-            self.ff_layers.append(torch.nn.Linear(shape[ii],shape[ii+1]))
-        self.ff_layers.append(torch.nn.Linear(shape[ii], 2*dim_z))  # mean, diag of log(variance)
+          ff_layers.append(torch.nn.Linear(shape[ii],shape[ii+1]))
+        ff_layers.append(torch.nn.Linear(shape[ii], 2*dim_z))  # mean, diag of log(variance)
 
         conv_layers = torch.nn.ModuleList(conv_layers)
         ff_layers = torch.nn.ModuleList(ff_layers)
@@ -115,15 +138,26 @@ class BallEncoder(Encoder):
         super(BallEncoder, self).__init__(m, dim_in, dim_z, conv_layers, pool_layers, ff_layers, conv_activation=conv_activation, ff_activation=ff_activation)
 
 class BallDecoder(Decoder):
-    def __init__(self, dim_in, dim_z, channels, ff_shape, conv_activation, stride, padding, pool, ff_activation): 
-        out_channel = 16
-        m = nn.Sequential(
-          nn.ConvTranspose2d(in_channel, out_channel, 3, stride=2),
-          nn.ReLU(),
-          nn.ConvTranspose2D(out_channel, 
-        )
+    def __init__(self, dim_in, dim_out, channels, ff_shape, conv_activation, stride, padding, ff_activation): 
+        ff_layers = []
+        conv_layers = []
 
-        super(BallDecoder, self).__init__(m, dim_in) 
+        ff_shape.insert(0, dim_in)
+        for ii in range(0,len(ff_shape)-1):
+          ff_layers.append(torch.nn.Linear(ff_shape[ii],ff_shape[ii+1]))
+        ff_layers.append(torch.nn.Linear(ff_shape[-1], np.prod(list(dim_in))))
+
+        ff_layers = torch.nn.ModuleList(ff_layers)
+
+        channels.insert(0,1)
+        channels.append(dim_out[-1])    # output depth same as input image
+        for ii in range(0,len(channels)-1):
+            conv_layers.append(torch.nn.ConvTranspose2d(channels[ii], channels[ii+1], kernel[ii],
+                stride=stride[ii], padding=padding[ii]))
+        
+        conv_layers = torch.nn.ModuleList(conv_layers)
+        ff_layers = torch.nn.ModuleList(ff_layers)
+        super(BallDecoder, self).__init__(m, dim_in, dim_out, ff_layers, conv_layers, ff_activation=ff_activation, conv_activation=conv_activation) 
 
 
 class BallTransition(Transition):
