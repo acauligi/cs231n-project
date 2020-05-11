@@ -2,7 +2,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 
-from losses import binary_crossentropy
+from .losses import binary_crossentropy
 
 
 class NormalDistribution(object):
@@ -56,9 +56,9 @@ def KLDGaussian(Q, N, eps=1e-8):
 
 
 class E2C(nn.Module):
-    def __init__(self, dim_in, dim_z, dim_u, channels, ff_shape, config='ball', conv_activation=None, ff_activation=None, kernel=2, stride=2, padding=0, pool):
+    def __init__(self, dim_in, dim_z, dim_u, channels, ff_shape, config='ball', conv_activation=None, ff_activation=None, kernel=2, stride=2, padding=0, pool=None):
         """Constructor for BnBCNN.
-            dim_in: tuple of image size (W,H)
+            dim_in: tuple of image size (C,W,H)
             dim_u: dimension of control vector in latent space
             channels: vector of length N+1 specifying # of channels for each convolutional layer,
             ff_shape: vector specifying shape of feedforward network. ff_shape[0] should be 
@@ -86,7 +86,7 @@ class E2C(nn.Module):
         if not pool or len(pool)==1:
             self.pool = [pool]*n_channels
 
-        self.encoder = enc(dim_in, dim_z, channels, activation, kernel, stride, padding, pool) 
+        self.encoder = enc(dim_in, dim_z, channels, ff_shape, conv_activation, ff_activation, kernel, stride, padding, pool) 
 
         self.decoder = dec(dim_z, dim_in, channels.reverse(), activation, kernel, stride, padding) 
 
@@ -156,4 +156,4 @@ def compute_loss(x_dec, x_next_pred_dec, x, x_next,
     kl = KLDGaussian(Qz_next_pred, Qz_next)
     return bound_loss.mean(), kl.mean()
 
-from configs import load_config
+from .configs import load_config
