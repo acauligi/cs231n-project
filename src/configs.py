@@ -159,7 +159,7 @@ class Transition(nn.Module):
         return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=v, r=r)
 
 
-class CifarEncoder(Encoder):
+class BallEncoder(Encoder):
     def __init__(self, dim_in, dim_z): 
         channels_enc = [3, 8, 8]
         ff_shape = [32, 32]
@@ -173,9 +173,9 @@ class CifarEncoder(Encoder):
         padding= [2] * n_channels
         pool = [2, 2] * n_channels
 
-        super(CifarEncoder, self).__init__(dim_in, dim_z, channels_enc, ff_shape, kernel_enc, stride, padding, pool, conv_activation=conv_activation, ff_activation=ff_activation)
+        super(BallEncoder, self).__init__(dim_in, dim_z, channels_enc, ff_shape, kernel_enc, stride, padding, pool, conv_activation=conv_activation, ff_activation=ff_activation)
 
-class CifarDecoder(Decoder):
+class BallDecoder(Decoder):
     def __init__(self, dim_in, dim_out): 
         channels_dec = [8, 8, dim_out[0]]
         ff_shape = [32, 32]
@@ -189,9 +189,9 @@ class CifarDecoder(Decoder):
         padding= [2] * n_channels
         pool = [2, 2] * n_channels
 
-        super(CifarDecoder, self).__init__(dim_in, dim_out, channels_dec, ff_shape, kernel_dec, stride, padding, ff_activation=ff_activation, conv_activation=conv_activation)
+        super(BallDecoder, self).__init__(dim_in, dim_out, channels_dec, ff_shape, kernel_dec, stride, padding, ff_activation=ff_activation, conv_activation=conv_activation)
 
-class CifarTransition(Transition):
+class BallTransition(Transition):
     def __init__(self, dim_z, dim_u):
         trans = nn.Sequential(
             nn.Linear(dim_z, 100),
@@ -202,11 +202,11 @@ class CifarTransition(Transition):
             nn.ReLU(),
             nn.Linear(100, dim_z*2)
         )
-        super(CifarTransition, self).__init__(trans, dim_z, dim_u)
+        super(BallTransition, self).__init__(trans, dim_z, dim_u)
 
 
 _CONFIG_MAP = {
-    'cifar': (CifarEncoder, CifarTransition, CifarDecoder),
+    'cifar': (BallEncoder, BallTransition, BallDecoder),
 }
 
 

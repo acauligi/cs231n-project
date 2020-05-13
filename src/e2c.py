@@ -56,7 +56,7 @@ def KLDGaussian(Q, N, eps=1e-8):
 
 
 class E2C(nn.Module):
-    def __init__(self, dim_in, dim_z, dim_u, config='cifar'):
+    def __init__(self, dim_in, dim_z, dim_u, config='ball'):
         """Constructor for BnBCNN.
             dim_in: tuple of image size (C,W,H)
             dim_u: dimension of control vector in latent space
