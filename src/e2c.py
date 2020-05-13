@@ -56,7 +56,7 @@ def KLDGaussian(Q, N, eps=1e-8):
 
 
 class E2C(nn.Module):
-    def __init__(self, dim_in, dim_z, dim_u, channels, ff_shape, config='ball', conv_activation=None, ff_activation=None, kernel=2, stride=2, padding=0, pool=None):
+    def __init__(self, dim_in, dim_z, dim_u, config='cifar'):
         """Constructor for BnBCNN.
             dim_in: tuple of image size (C,W,H)
             dim_u: dimension of control vector in latent space
@@ -76,27 +76,16 @@ class E2C(nn.Module):
 
         enc, trans, dec = load_config(config)
 
-        n_channels = len(channels)-1 # number of conv layers
-        if type(kernel) is int:
-            self.kernel = [kernel]*n_channels
-        if type(stride) is int:
-            self.stride = [stride]*n_channels
-        if type(padding) is int:
-            self.padding = [padding]*n_channels
-        if not pool or len(pool)==1:
-            self.pool = [pool]*n_channels
-
-        self.encoder = enc(dim_in, dim_z, channels, ff_shape, conv_activation, ff_activation, kernel, stride, padding, pool) 
-
-        self.decoder = dec(dim_z, dim_in, channels.reverse(), activation, kernel, stride, padding) 
-
+        self.encoder = enc(dim_in, dim_z) 
+        self.decoder = dec(dim_z, dim_in) 
         self.trans = trans(dim_z, dim_u)
 
     def encode(self, x):
-        return torch.flatten(self.encoder(x) ,start_dim=1)
+        mean, logvar = self.encoder(x)
+        return mean, logvar
 
     def decode(self, z):
-        return self.decoder(torch.reshape(z, self.encoder.cnn_output_size))
+        return self.decoder(z)
 
     def transition(self, z, Qz, u):
         return self.trans(z, Qz, u)
@@ -138,10 +127,10 @@ class E2C(nn.Module):
 
 def compute_loss(x_dec, x_next_pred_dec, x, x_next,
                  Qz, Qz_next_pred,
-                 Qz_next):
+                 Qz_next, mse=False):
     # Reconstruction losses
-    if False:
-        x_reconst_loss = (x_dec - x_next).pow(2).sum(dim=1)
+    if mse:
+        x_reconst_loss = (x_dec - x).pow(2).sum(dim=1)
         x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=1)
     else:
         x_reconst_loss = -binary_crossentropy(x, x_dec).sum(dim=1)

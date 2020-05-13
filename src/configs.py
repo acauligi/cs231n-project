@@ -10,15 +10,45 @@ import numpy as np
 import copy
 
 class Encoder(nn.Module):
-    def __init__(self, dim_in, dim_out, conv_layers, pool_layers, ff_layers, conv_activation=None, ff_activation=None): 
+    def __init__(self, dim_in, dim_z, channels, ff_shape, kernel, stride, padding, pool, conv_activation=None, ff_activation=None): 
         super(Encoder, self).__init__()
-        self.dim_in = dim_in
-        self.dim_out = dim_out
+        conv_layers = []
+        pool_layers = []
+        ff_layers = []
 
-        self.conv_layers = conv_layers
-        self.pool_layers = pool_layers
+        C, W, H = dim_in
+        for ii in range(0,len(channels)-1):
+            conv_layers.append(torch.nn.Conv2d(channels[ii], channels[ii+1], kernel[ii],
+                stride=stride[ii], padding=padding[ii]))
+
+            # Keep track of output image size
+            W = int(1+(W - kernel[ii] +2*padding[ii])/stride[ii])
+            H = int(1+(H - kernel[ii] +2*padding[ii])/stride[ii])
+            if pool[ii]:
+                if W % pool[ii] != 0 or H % pool[ii] != 0:
+                    raise ValueError('trying to pool by non-factor')
+                W, H = int(W/pool[ii]), int(H/pool[ii])
+                pool_layers.append(torch.nn.MaxPool2d(pool[ii]))
+            else:
+                pool_layers.append(None)
+
+        self.cnn_output_size = W*H*channels[-1]
+
+        ff_shape = np.concatenate(([self.cnn_output_size], ff_shape))
+        for ii in range(0, len(ff_shape) - 1):
+          ff_layers.append(torch.nn.Linear(ff_shape[ii], ff_shape[ii+1]))
+        ff_layers.append(torch.nn.Linear(ff_shape[ii], 2*dim_z))  # mean, diag of log(variance)
+
+        self.dim_in = dim_in
+        self.dim_out = dim_z 
+
+        self.conv_layers = torch.nn.ModuleList(conv_layers)
+        if any(pool): 
+            self.pool_layers = torch.nn.ModuleList(pool_layers)
+        else:
+            self.pool_layers = pool_layers 
         
-        self.ff_layers = ff_layers
+        self.ff_layers = torch.nn.ModuleList(ff_layers)
 
         self.conv_activation = conv_activation
         self.ff_activation = ff_activation
@@ -41,13 +71,38 @@ class Encoder(nn.Module):
         return x.chunk(2, dim=1)
 
 class Decoder(nn.Module):
-    def __init__(self, dim_in, dim_out, ff_layers, conv_layers, cnn_input_size, ff_activation=None, conv_activation=None): 
+    def __init__(self, dim_in, dim_out, channels, ff_shape, kernel, stride, padding, ff_activation=None, conv_activation=None):
         super(Decoder, self).__init__()
+
+        ff_shape = copy.copy(ff_shape)
+        channels = copy.copy(channels)
+
+        ff_layers = []
+        conv_layers = []
+
+        # Work backwards to figure out what flattened
+        # input dimension should be for conv input
+        C, W, H = dim_out
+        for ii in range(len(channels)-2, -1, -1):
+          W = int(1 + (W - kernel[ii] +2*padding[ii])/stride[ii])
+          H = int(1 + (H - kernel[ii] +2*padding[ii])/stride[ii])
+
+        cnn_input_size = (channels[0],W,H)  # input image to conv portion set to 1 channel
+
+        ff_shape.insert(0, dim_in)
+        for ii in range(0, len(ff_shape)-1):
+          ff_layers.append(torch.nn.Linear(ff_shape[ii], ff_shape[ii+1]))
+        ff_layers.append(torch.nn.Linear(ff_shape[-1], np.prod(list(cnn_input_size))))
+
+        for ii in range(0, len(channels)-1):
+            conv_layers.append(torch.nn.ConvTranspose2d(channels[ii], channels[ii+1], kernel[ii],
+                stride=stride[ii], padding=padding[ii]))
+
         self.dim_in = dim_in
         self.dim_out = dim_out
 
-        self.ff_layers = ff_layers
-        self.conv_layers = conv_layers
+        self.ff_layers = torch.nn.ModuleList(ff_layers)
+        self.conv_layers = torch.nn.ModuleList(conv_layers)
         self.cnn_input_size = cnn_input_size
 
         self.ff_activation = ff_activation
@@ -104,73 +159,39 @@ class Transition(nn.Module):
         return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=v, r=r)
 
 
-class BallEncoder(Encoder):
-    def __init__(self, dim_in, dim_z, channels, ff_shape, conv_activation, ff_activation, kernel, stride, padding, pool): 
-        conv_layers = []
-        pool_layers = []
-        ff_layers = []
+class CifarEncoder(Encoder):
+    def __init__(self, dim_in, dim_z): 
+        channels_enc = [3, 8, 8]
+        ff_shape = [32, 32]
 
-        C, W, H = dim_in
-        for ii in range(0,len(channels)-1):
-            conv_layers.append(torch.nn.Conv2d(channels[ii], channels[ii+1], kernel[ii],
-                stride=stride[ii], padding=padding[ii]))
+        conv_activation = torch.nn.ReLU()
+        ff_activation = torch.nn.ReLU()
 
-            # Keep track of output image size
-            W = int(1+(W - kernel[ii] +2*padding[ii])/stride[ii])
-            H = int(1+(H - kernel[ii] +2*padding[ii])/stride[ii])
-            if pool[ii]:
-                if W % pool[ii] != 0 or H % pool[ii] != 0:
-                    raise ValueError('trying to pool by non-factor')
-                W, H = int(W/pool[ii]), int(H/pool[ii])
-                pool_layers.append(torch.nn.MaxPool2d(pool[ii]))
-            else:
-                pool_layers.append(None)
+        n_channels = len(channels_enc) - 1
+        kernel_enc = [2,3]
+        stride= [2] * n_channels
+        padding= [2] * n_channels
+        pool = [2, 2] * n_channels
 
-        cnn_output_size = W*H*channels[-1]
+        super(CifarEncoder, self).__init__(dim_in, dim_z, channels_enc, ff_shape, kernel_enc, stride, padding, pool, conv_activation=conv_activation, ff_activation=ff_activation)
 
-        ff_shape = np.concatenate(([cnn_output_size], ff_shape))
-        for ii in range(0, len(ff_shape) - 1):
-          ff_layers.append(torch.nn.Linear(ff_shape[ii], ff_shape[ii+1]))
-        ff_layers.append(torch.nn.Linear(ff_shape[ii], 2*dim_z))  # mean, diag of log(variance)
+class CifarDecoder(Decoder):
+    def __init__(self, dim_in, dim_out): 
+        channels_dec = [8, 8, dim_out[0]]
+        ff_shape = [32, 32]
 
-        conv_layers = torch.nn.ModuleList(conv_layers)
-        ff_layers = torch.nn.ModuleList(ff_layers)
-        if any(pool): 
-            pool_layers = torch.nn.ModuleList(pool_layers)
+        conv_activation = torch.nn.ReLU()
+        ff_activation = torch.nn.ReLU()
 
-        super(BallEncoder, self).__init__(dim_in, dim_z, conv_layers, pool_layers, ff_layers, conv_activation=conv_activation, ff_activation=ff_activation)
+        n_channels = len(channels_dec) - 1
+        kernel_dec = [2, 2]
+        stride= [2] * n_channels
+        padding= [2] * n_channels
+        pool = [2, 2] * n_channels
 
-class BallDecoder(Decoder):
-    def __init__(self, dim_in, dim_out, channels, ff_shape, kernel, stride, padding, ff_activation, conv_activation):
-        ff_shape = copy.copy(ff_shape)
-        channels = copy.copy(channels)
+        super(CifarDecoder, self).__init__(dim_in, dim_out, channels_dec, ff_shape, kernel_dec, stride, padding, ff_activation=ff_activation, conv_activation=conv_activation)
 
-        ff_layers = []
-        conv_layers = []
-
-        # Work backwards to figure out what flattened
-        # input dimension should be for conv input
-        C, W, H = dim_out
-        for ii in range(len(channels)-2, -1, -1):
-          W = int(1 + (W - kernel[ii] +2*padding[ii])/stride[ii])
-          H = int(1 + (H - kernel[ii] +2*padding[ii])/stride[ii])
-
-        cnn_input_size = (channels[0],W,H)  # input image to conv portion set to 1 channel
-
-        ff_shape.insert(0, dim_in)
-        for ii in range(0, len(ff_shape)-1):
-          ff_layers.append(torch.nn.Linear(ff_shape[ii], ff_shape[ii+1]))
-        ff_layers.append(torch.nn.Linear(ff_shape[-1], np.prod(list(cnn_input_size))))
-
-        for ii in range(0, len(channels)-1):
-            conv_layers.append(torch.nn.ConvTranspose2d(channels[ii], channels[ii+1], kernel[ii],
-                stride=stride[ii], padding=padding[ii]))
-
-        conv_layers = torch.nn.ModuleList(conv_layers)
-        ff_layers = torch.nn.ModuleList(ff_layers)
-        super(BallDecoder, self).__init__(dim_in, dim_out, ff_layers, conv_layers, cnn_input_size, ff_activation=ff_activation, conv_activation=conv_activation) 
-
-class BallTransition(Transition):
+class CifarTransition(Transition):
     def __init__(self, dim_z, dim_u):
         trans = nn.Sequential(
             nn.Linear(dim_z, 100),
@@ -181,11 +202,11 @@ class BallTransition(Transition):
             nn.ReLU(),
             nn.Linear(100, dim_z*2)
         )
-        super(BallTransition, self).__init__(trans, dim_z, dim_u)
+        super(CifarTransition, self).__init__(trans, dim_z, dim_u)
 
 
 _CONFIG_MAP = {
-    'ball': (BallEncoder, BallTransition, BallDecoder),
+    'cifar': (CifarEncoder, CifarTransition, CifarDecoder),
 }
 
 
