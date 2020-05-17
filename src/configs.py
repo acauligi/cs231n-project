@@ -3,8 +3,10 @@ Configuration for the encoder, decoder, transition
 for different tasks. Use load_config to find the proper
 set of configuration.
 """
+import pdb
 import torch
 from torch import nn
+from torch import nn,distributions
 from torch.autograd import Variable
 import numpy as np
 import copy
@@ -136,27 +138,37 @@ class Transition(nn.Module):
         self.fc_B = nn.Linear(dim_z, dim_z * dim_u)
         self.fc_o = nn.Linear(dim_z, dim_z)
 
-    def forward(self, h, Q, u):
-        batch_size = h.size()[0]
-        v, r = self.trans(h).chunk(2, dim=1)
-        v1 = v.unsqueeze(2)
-        rT = r.unsqueeze(1)
+    def forward(self, hh, Q, uu):
+        batch_size = hh.size()[0]
+        vv, rr = self.trans(hh).chunk(2, dim=1)
+        v1 = vv.unsqueeze(2)
+        rT = rr.unsqueeze(1)
         I = Variable(torch.eye(self.dim_z).repeat(batch_size, 1, 1))
         if rT.data.is_cuda:
             I.dada.cuda()
         A = I.add(v1.bmm(rT))
 
-        B = self.fc_B(h).view(-1, self.dim_z, self.dim_u)
-        o = self.fc_o(h)
+        if self.dim_u is not 0:
+          B = self.fc_B(hh).view(-1, self.dim_z, self.dim_u)
+        o = self.fc_o(hh)
 
         # need to compute the parameters for distributions
         # as well as for the samples
-        u = u.unsqueeze(2)
+        if self.dim_u is not 0:
+          uu = uu.unsqueeze(2)
 
-        d = A.bmm(Q.mu.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
-        sample = A.bmm(h.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
+        if self.dim_u is not 0:
+          d = A.bmm(Q.mu.unsqueeze(2)).add(B.bmm(uu)).add(o).squeeze(2)
+          sample = A.bmm(hh.unsqueeze(2)).add(B.bmm(uu)).add(o).squeeze(2)
+        else:
+          d = A.bmm(Q.mu.unsqueeze(2)).add(o.unsqueeze(2)).squeeze(2)
+          sample = A.bmm(hh.unsqueeze(2)).add(o.unsqueeze(2)).squeeze(2)
 
-        return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=v, r=r)
+        # z_cov = Q.covariance_matrix
+        # z_next_cov = A.bmm(z_cov).bmm(A.transpose(1,2))
+
+        return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=vv, r=rr)
+        # return sample, distributions.MultivariateNormal(d,z_next_cov)
 
 
 class BallEncoder(Encoder):
@@ -206,7 +218,7 @@ class BallTransition(Transition):
 
 
 _CONFIG_MAP = {
-    'cifar': (BallEncoder, BallTransition, BallDecoder),
+    'ball': (BallEncoder, BallTransition, BallDecoder),
 }
 
 

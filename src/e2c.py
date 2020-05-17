@@ -1,5 +1,7 @@
+import pdb
 import torch
 from torch import nn
+from torch import nn,distributions
 from torch.autograd import Variable
 
 from .losses import binary_crossentropy
@@ -99,6 +101,11 @@ class E2C(nn.Module):
             eps.cuda()
         eps = Variable(eps)
         return eps.mul(std).add_(mean), NormalDistribution(mean, std, torch.log(std))
+        # cov = []
+        # for _ in std:
+        #     cov.append(torch.diag(_))
+        # cov = torch.stack(cov,dim=0)
+        # return eps.mul(std).add_(mean), distributions.MultivariateNormal(mean, cov)
 
     def forward(self, x, action, x_next):
         mean, logvar = self.encode(x)
@@ -109,7 +116,6 @@ class E2C(nn.Module):
 
         self.x_dec = self.decode(z)
         self.x_next_dec = self.decode(z_next)
-
         self.z_next_pred, self.Qz_next_pred = self.transition(z, self.Qz, action)
         self.x_next_pred_dec = self.decode(self.z_next_pred)
 
@@ -127,7 +133,7 @@ class E2C(nn.Module):
 
 def compute_loss(x_dec, x_next_pred_dec, x, x_next,
                  Qz, Qz_next_pred,
-                 Qz_next, mse=False):
+                 Qz_next, mse=True):
     # Reconstruction losses
     if mse:
         x_reconst_loss = (x_dec - x).pow(2).sum(dim=1)
@@ -141,8 +147,16 @@ def compute_loss(x_dec, x_next_pred_dec, x, x_next,
     KLD = torch.sum(KLD_element, dim=1).mul(-0.5)
 
     # ELBO
-    bound_loss = x_reconst_loss.add(x_next_reconst_loss).add(KLD)
+    bound_loss = x_reconst_loss # .add(x_next_reconst_loss) # .add(KLD) # TODO(acauligi)
     kl = KLDGaussian(Qz_next_pred, Qz_next)
     return bound_loss.mean(), kl.mean()
+
+    # prior = distributions.MultivariateNormal(torch.zeros_like(Qz.mean[0]),torch.diag(torch.ones_like(Qz.mean[0])))
+    # KLD = distributions.kl_divergence(Qz,prior)+distributions.kl_divergence(Qz_next,prior)
+
+    # # ELBO
+    # bound_loss = x_reconst_loss.add(x_next_reconst_loss) # .add(KLD)
+    # trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next) # .add(x_next_pre_reconst_loss)
+    # return bound_loss.mean()/2, trans_loss.mean()
 
 from .configs import load_config
