@@ -5,8 +5,8 @@ from torch import nn
 
 
 def get_ball_encoder(dim_in, dim_z): 
-    channels_enc = [3, 32, 32]
-    ff_shape = [512, 512]
+    channels_enc = [3, 16, 16]
+    ff_shape = [256, 256]
 
     conv_activation = torch.nn.ReLU()
     ff_activation = torch.nn.ReLU()
@@ -21,8 +21,8 @@ def get_ball_encoder(dim_in, dim_z):
 
 
 def get_ball_decoder(dim_in, dim_out): 
-    channels_dec = [32, 32, dim_out[0]]
-    ff_shape = [512, 512]
+    channels_dec = [16, 16, dim_out[0]]
+    ff_shape = [256, 256]
 
     conv_activation = torch.nn.ReLU()
     ff_activation = torch.nn.ReLU()
