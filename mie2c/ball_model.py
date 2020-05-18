@@ -37,14 +37,15 @@ def get_ball_decoder(dim_in, dim_out):
 
 
 def get_ball_transition(dim_z, dim_u):
+    nn_width = 200
     trans = nn.Sequential(
-        nn.Linear(dim_z, 100),
-        nn.BatchNorm1d(100),
+        nn.Linear(dim_z, nn_width),
+        # nn.BatchNorm1d(100),
         nn.ReLU(),
-        nn.Linear(100, 100),
-        nn.BatchNorm1d(100),
+        nn.Linear(nn_width, nn_width),
+        # nn.BatchNorm1d(100),
         nn.ReLU(),
-        nn.Linear(100, dim_z*2)
+        nn.Linear(nn_width, dim_z*2)
     )
 
     return Transition(trans, dim_z, dim_u)
