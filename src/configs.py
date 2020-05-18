@@ -15,6 +15,8 @@ class Encoder(nn.Module):
     def __init__(self, dim_in, dim_z, channels, ff_shape, kernel, stride, padding, pool, conv_activation=None, ff_activation=None): 
         super(Encoder, self).__init__()
         conv_layers = []
+        conv_batch_layers = []
+        ff_batch_layers = []
         pool_layers = []
         ff_layers = []
 
@@ -22,6 +24,7 @@ class Encoder(nn.Module):
         for ii in range(0,len(channels)-1):
             conv_layers.append(torch.nn.Conv2d(channels[ii], channels[ii+1], kernel[ii],
                 stride=stride[ii], padding=padding[ii]))
+            conv_batch_layers.append(torch.nn.BatchNorm2d(channels[ii+1]))
 
             # Keep track of output image size
             W = int(1+(W - kernel[ii] +2*padding[ii])/stride[ii])
@@ -39,18 +42,22 @@ class Encoder(nn.Module):
         ff_shape = np.concatenate(([self.cnn_output_size], ff_shape))
         for ii in range(0, len(ff_shape) - 1):
           ff_layers.append(torch.nn.Linear(ff_shape[ii], ff_shape[ii+1]))
+          ff_batch_layers.append(torch.nn.BatchNorm1d(ff_shape[ii+1]))
         ff_layers.append(torch.nn.Linear(ff_shape[ii], 2*dim_z))  # mean, diag of log(variance)
+        ff_batch_layers.append(torch.nn.BatchNorm1d(2*dim_z))
 
         self.dim_in = dim_in
         self.dim_out = dim_z 
 
         self.conv_layers = torch.nn.ModuleList(conv_layers)
+        self.conv_batch_layers = torch.nn.ModuleList(conv_batch_layers)
         if any(pool): 
             self.pool_layers = torch.nn.ModuleList(pool_layers)
         else:
             self.pool_layers = pool_layers 
         
         self.ff_layers = torch.nn.ModuleList(ff_layers)
+        self.ff_batch_layers = torch.nn.ModuleList(ff_batch_layers)
 
         self.conv_activation = conv_activation
         self.ff_activation = ff_activation
@@ -61,6 +68,7 @@ class Encoder(nn.Module):
             x = self.conv_layers[ii](x)
             if self.conv_activation:
                 x = self.conv_activation(x)
+            x = self.conv_batch_layers[ii](x)
             if self.pool_layers[ii]:
                 x = self.pool_layers[ii](x)
  
@@ -68,6 +76,7 @@ class Encoder(nn.Module):
         x = x.view(x.shape[0], -1)
         for ii in range(0,len(self.ff_layers)):
             x = self.ff_layers[ii](x)
+            # x = self.ff_batch_layers[ii](x)
             if self.ff_activation:
                 x = self.ff_activation(x)
         return x.chunk(2, dim=1)
@@ -81,6 +90,7 @@ class Decoder(nn.Module):
 
         ff_layers = []
         conv_layers = []
+        conv_batch_layers = []
 
         # Work backwards to figure out what flattened
         # input dimension should be for conv input
@@ -99,12 +109,14 @@ class Decoder(nn.Module):
         for ii in range(0, len(channels)-1):
             conv_layers.append(torch.nn.ConvTranspose2d(channels[ii], channels[ii+1], kernel[ii],
                 stride=stride[ii], padding=padding[ii]))
+            conv_batch_layers.append(torch.nn.BatchNorm2d(channels[ii+1]))
 
         self.dim_in = dim_in
         self.dim_out = dim_out
 
         self.ff_layers = torch.nn.ModuleList(ff_layers)
         self.conv_layers = torch.nn.ModuleList(conv_layers)
+        self.conv_batch_layers = torch.nn.ModuleList(conv_batch_layers)
         self.cnn_input_size = cnn_input_size
 
         self.ff_activation = ff_activation
@@ -124,6 +136,7 @@ class Decoder(nn.Module):
         x = x.view(N,C,W,H)
         for ii in range(0, len(self.conv_layers)):
             x = self.conv_layers[ii](x)
+            # x = self.conv_batch_layers[ii](x)
             if self.conv_activation:
                 x = self.conv_activation(x)
         return x
@@ -145,7 +158,8 @@ class Transition(nn.Module):
         rT = rr.unsqueeze(1)
         I = Variable(torch.eye(self.dim_z).repeat(batch_size, 1, 1))
         if rT.data.is_cuda:
-            I.dada.cuda()
+            # I.data.cuda()
+            I = I.to(rT.device)
         A = I.add(v1.bmm(rT))
 
         if self.dim_u is not 0:
@@ -173,8 +187,8 @@ class Transition(nn.Module):
 
 class BallEncoder(Encoder):
     def __init__(self, dim_in, dim_z): 
-        channels_enc = [3, 8, 8]
-        ff_shape = [32, 32]
+        channels_enc = [3, 32, 64]
+        ff_shape = [512, 512]
 
         conv_activation = torch.nn.ReLU()
         ff_activation = torch.nn.ReLU()
@@ -189,8 +203,8 @@ class BallEncoder(Encoder):
 
 class BallDecoder(Decoder):
     def __init__(self, dim_in, dim_out): 
-        channels_dec = [8, 8, dim_out[0]]
-        ff_shape = [32, 32]
+        channels_dec = [64, 32, dim_out[0]]
+        ff_shape = [512, 512]
 
         conv_activation = torch.nn.ReLU()
         ff_activation = torch.nn.ReLU()
@@ -206,13 +220,16 @@ class BallDecoder(Decoder):
 class BallTransition(Transition):
     def __init__(self, dim_z, dim_u):
         trans = nn.Sequential(
-            nn.Linear(dim_z, 100),
-            nn.BatchNorm1d(100),
+            nn.Linear(dim_z, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Linear(100, 100),
-            nn.BatchNorm1d(100),
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
             nn.ReLU(),
-            nn.Linear(100, dim_z*2)
+            nn.Linear(256, 256),
+            nn.BatchNorm1d(256),
+            nn.ReLU(),
+            nn.Linear(256, dim_z*2)
         )
         super(BallTransition, self).__init__(trans, dim_z, dim_u)
 

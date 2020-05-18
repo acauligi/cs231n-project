@@ -82,24 +82,35 @@ class E2C(nn.Module):
         self.decoder = dec(dim_z, dim_in) 
         self.trans = trans(dim_z, dim_u)
 
-    def encode(self, x):
-        mean, logvar = self.encoder(x)
+        self.prior = distributions.Normal(0, 1)
+
+    def encode(self, x, use_eval=False):
+        if use_eval:
+          mean, logvar = self.encoder.eval()(x)
+        else:
+          mean, logvar = self.encoder(x)
         return mean, logvar
 
-    def decode(self, z):
-        return self.decoder(z)
+    def decode(self, z, use_eval=False):
+        if use_eval:
+          return self.decoder.eval()(z)
+        else:
+          return self.decoder(z)
 
-    def transition(self, z, Qz, u):
-        return self.trans(z, Qz, u)
+    def transition(self, z, Qz, u, use_eval=False):
+        if use_eval:
+          return self.trans.eval()(z, Qz, u)
+        else:
+          return self.trans(z, Qz, u)
 
     def reparam(self, mean, logvar):
         std = logvar.mul(0.5).exp_()
         self.z_mean = mean
         self.z_sigma = std
         eps = torch.FloatTensor(std.size()).normal_()
+        eps = self.prior.sample()
         if std.data.is_cuda:
-            eps.cuda()
-        eps = Variable(eps)
+            eps.to(std.device)
         return eps.mul(std).add_(mean), NormalDistribution(mean, std, torch.log(std))
         # cov = []
         # for _ in std:
@@ -107,17 +118,17 @@ class E2C(nn.Module):
         # cov = torch.stack(cov,dim=0)
         # return eps.mul(std).add_(mean), distributions.MultivariateNormal(mean, cov)
 
-    def forward(self, x, action, x_next):
-        mean, logvar = self.encode(x)
-        mean_next, logvar_next = self.encode(x_next)
+    def forward(self, x, action, x_next, use_eval=False):
+        mean, logvar = self.encode(x, use_eval=use_eval)
+        mean_next, logvar_next = self.encode(x_next, use_eval=use_eval)
 
         z, self.Qz = self.reparam(mean, logvar)
         z_next, self.Qz_next = self.reparam(mean_next, logvar_next)
 
-        self.x_dec = self.decode(z)
-        self.x_next_dec = self.decode(z_next)
-        self.z_next_pred, self.Qz_next_pred = self.transition(z, self.Qz, action)
-        self.x_next_pred_dec = self.decode(self.z_next_pred)
+        self.x_dec = self.decode(z, use_eval=use_eval)
+        self.x_next_dec = self.decode(z_next, use_eval=use_eval)
+        self.z_next_pred, self.Qz_next_pred = self.transition(z, self.Qz, action, use_eval=use_eval)
+        self.x_next_pred_dec = self.decode(self.z_next_pred, use_eval=use_eval)
 
         return self.x_next_pred_dec
 
@@ -125,31 +136,29 @@ class E2C(nn.Module):
         return self.encode(x)[0]
 
     def predict(self, X, U):
-        mean, logvar = self.encode(X)
+        mean, logvar = self.encode(X, use_eval=False)
         z, Qz = self.reparam(mean, logvar)
-        z_next_pred, Qz_next_pred = self.transition(z, Qz, U)
-        return self.decode(z_next_pred)
+        z_next_pred, Qz_next_pred = self.transition(z, Qz, U, use_eval=False)
+        return self.decode(z_next_pred, use_eval=True)
 
 
 def compute_loss(x_dec, x_next_pred_dec, x, x_next,
                  Qz, Qz_next_pred,
-                 Qz_next, mse=True):
+                 Qz_next): 
     # Reconstruction losses
-    if mse:
-        x_reconst_loss = (x_dec - x).pow(2).sum(dim=1)
-        x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=1)
-    else:
-        x_reconst_loss = -binary_crossentropy(x, x_dec).sum(dim=1)
-        x_next_reconst_loss = -binary_crossentropy(x_next, x_next_pred_dec).sum(dim=1)
+    x_reconst_loss = (x_dec - x).pow(2).sum(dim=1)
+    x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=1)
 
     logvar = Qz.logsigma.mul(2)
     KLD_element = Qz.mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
     KLD = torch.sum(KLD_element, dim=1).mul(-0.5)
 
     # ELBO
-    bound_loss = x_reconst_loss # .add(x_next_reconst_loss) # .add(KLD) # TODO(acauligi)
+    bound_loss = x_reconst_loss.add(x_next_reconst_loss) # .add(KLD) # TODO(acauligi)
+    bound_loss = bound_loss.mean() + KLD.mean()
     kl = KLDGaussian(Qz_next_pred, Qz_next)
-    return bound_loss.mean(), kl.mean()
+    kl = kl.mean()
+    return bound_loss, kl
 
     # prior = distributions.MultivariateNormal(torch.zeros_like(Qz.mean[0]),torch.diag(torch.ones_like(Qz.mean[0])))
     # KLD = distributions.kl_divergence(Qz,prior)+distributions.kl_divergence(Qz_next,prior)
