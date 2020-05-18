@@ -189,35 +189,7 @@ class Transition(nn.Module):
         self.fc_B = nn.Linear(dim_z, dim_z * dim_u)
         self.fc_o = nn.Linear(dim_z, dim_z)
 
-    # def forward(self, h, Q, u):
-    #     batch_size = h.size()[0]
-        
-    #     # computes the new basis vector for the embedded dynamics
-    #     v, r = self.trans(h).chunk(2, dim=1)
-    #     v1 = v.unsqueeze(2)
-    #     rT = r.unsqueeze(1)
-    #     I = Variable(torch.eye(self.dim_z).repeat(batch_size, 1, 1))
-    #     if rT.data.is_cuda:
-    #         I.dada.cuda()
-    #     # A is batch_size X z_size X z_size
-    #     A = I.add(v1.bmm(rT))
-
-    #     # B is batch_size X z_size X input_size
-    #     B = self.fc_B(h).view(-1, self.dim_z, self.dim_u)
-        
-    #     # o (constant terms) is batch_size X z_size
-    #     o = self.fc_o(h).unsqueeze(2)
-
-    #     # need to compute the parameters for distributions
-    #     # as well as for the samples
-    #     u = u.unsqueeze(2)
-
-    #     d = A.bmm(Q.mu.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
-    #     sample = A.bmm(h.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
-
-    #     return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=v, r=r)
-
-    def forward(self, h, u):
+    def forward(self, h, Q, u):
         batch_size = h.size()[0]
         
         # computes the new basis vector for the embedded dynamics
@@ -240,9 +212,37 @@ class Transition(nn.Module):
         # as well as for the samples
         u = u.unsqueeze(2)
 
+        d = A.bmm(Q.mu.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
         sample = A.bmm(h.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
 
-        return sample
+        return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=v, r=r)
+
+    # def forward(self, h, u):
+    #     batch_size = h.size()[0]
+        
+    #     # computes the new basis vector for the embedded dynamics
+    #     v, r = self.trans(h).chunk(2, dim=1)
+    #     v1 = v.unsqueeze(2)
+    #     rT = r.unsqueeze(1)
+    #     I = Variable(torch.eye(self.dim_z).repeat(batch_size, 1, 1))
+    #     if rT.data.is_cuda:
+    #         I.dada.cuda()
+    #     # A is batch_size X z_size X z_size
+    #     A = I.add(v1.bmm(rT))
+
+    #     # B is batch_size X z_size X input_size
+    #     B = self.fc_B(h).view(-1, self.dim_z, self.dim_u)
+        
+    #     # o (constant terms) is batch_size X z_size
+    #     o = self.fc_o(h).unsqueeze(2)
+
+    #     # need to compute the parameters for distributions
+    #     # as well as for the samples
+    #     u = u.unsqueeze(2)
+
+    #     sample = A.bmm(h.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
+
+    #     return sample
 
 
 class E2C(nn.Module):
@@ -274,10 +274,11 @@ class E2C(nn.Module):
     def decode(self, z):
         return self.decoder(z)
 
-    # def transition(self, z, Qz, u):
-    #     return self.trans(z, Qz, u)
-    def transition(self, z, u):
-        return self.trans(z, u)
+    def transition(self, z, Qz, u):
+        return self.trans(z, Qz, u)
+
+    # def transition(self, z, u):
+    #     return self.trans(z, u)
 
     def reparam(self, mean, logvar):
         std = logvar.mul(0.5).exp_()
@@ -296,31 +297,33 @@ class E2C(nn.Module):
         z, self.Qz = self.reparam(mean, logvar)
         z_next, self.Qz_next = self.reparam(mean_next, logvar_next)
 
-        # self.x_dec = self.decode(z)
-        # self.x_next_dec = self.decode(z_next)
+        # self.x_dec = self.decode(mean)
+        # self.x_next_dec = self.decode(mean_next)
 
-        self.x_dec = self.decode(mean)
-        self.x_next_dec = self.decode(mean_next)
+        self.x_dec = self.decode(z)
+        self.x_next_dec = self.decode(z_next)
 
-        # self.z_next_pred, self.Qz_next_pred = self.transition(z, self.Qz, action)
-        # self.x_next_pred_dec = self.decode(self.z_next_pred)
+        # mean_next_pred = self.transition(mean, action)
+        # self.x_next_pred_dec = self.decode(mean_next_pred)
 
-        mean_next_pred = self.transition(mean, action)
-        self.x_next_pred_dec = self.decode(mean_next_pred)
+        self.z_next_pred, self.Qz_next_pred = self.transition(z, self.Qz, action)
+        self.x_next_pred_dec = self.decode(self.z_next_pred)
 
     def latent_embeddings(self, x):
         return self.encode(x)[0]
 
     def predict(self, X, U):
-        # mean, logvar = self.encode(X)
-        # z, Qz = self.reparam(mean, logvar)
         # z_next_pred, Qz_next_pred = self.transition(z, Qz, U)
         # return self.decode(z_next_pred)
         mean, logvar = self.encoder.eval()(X)
-        # z, Qz = self.reparam(mean, logvar)
-        # x_dec = self.decoder.eval()(z)
-        mean_next = self.trans.eval()(mean, U)
-        x_next_dec = self.decoder.eval()(mean_next)
+        z, Qz = self.reparam(mean, logvar)
+
+        # mean_next = self.trans.eval()(mean, U)
+        # x_next_dec = self.decoder.eval()(mean_next)
+        
+        z_next_pred, Qz_next_pred = self.trans.eval()(z, Qz, U)
+        x_next_dec = self.decoder.eval()(z_next_pred)
+
         return x_next_dec
 
 # def compute_loss(x_dec, x_next_pred_dec, x, x_next,
@@ -339,20 +342,12 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec, x, x_next,
     x_reconst_loss = (x_dec - x).pow(2).sum(dim=[1,2,3])
     x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
 
-    # logvar = Qz.logsigma.mul(2)
-    # KLD_element = Qz.mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-    # KLD = torch.sum(KLD_element, dim=1).mul(-0.5)
+    logvar = Qz.logsigma.mul(2)
+    KLD_element = Qz.mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
+    KLD = torch.sum(KLD_element, dim=1).mul(-0.5)
 
     # ELBO
-    # bound_loss = x_reconst_loss + x_next_reconst_loss + KLD
-
-    # bound_loss = x_reconst_loss + x_next_reconst_loss
-
-    # bound_loss = x_reconst_loss + KLD
-
-    bound_loss = x_reconst_loss + x_next_reconst_loss
-
-    # bound_loss = x_reconst_loss.add(x_next_reconst_loss).add(KLD.view(-1,1,1))
+    bound_loss = x_reconst_loss + x_next_reconst_loss + KLD
 
     # kl = KLDGaussian(Qz_next_pred, Qz_next)
 
