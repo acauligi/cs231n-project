@@ -16,9 +16,9 @@ class Encoder(nn.Module):
         super(Encoder, self).__init__()
         conv_layers = []
         conv_batch_layers = []
-        ff_batch_layers = []
         pool_layers = []
         ff_layers = []
+        ff_batch_layers = []
 
         C, W, H = dim_in
         for ii in range(0,len(channels)-1):
@@ -158,7 +158,6 @@ class Transition(nn.Module):
         rT = rr.unsqueeze(1)
         I = Variable(torch.eye(self.dim_z).repeat(batch_size, 1, 1))
         if rT.data.is_cuda:
-            # I.data.cuda()
             I = I.to(rT.device)
         A = I.add(v1.bmm(rT))
 
@@ -181,7 +180,7 @@ class Transition(nn.Module):
         # z_cov = Q.covariance_matrix
         # z_next_cov = A.bmm(z_cov).bmm(A.transpose(1,2))
 
-        return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=vv, r=rr)
+        return sample , NormalDistribution(d, Q.sigma, Q.logsigma, v=vv, r=rr)
         # return sample, distributions.MultivariateNormal(d,z_next_cov)
 
 
@@ -219,17 +218,18 @@ class BallDecoder(Decoder):
 
 class BallTransition(Transition):
     def __init__(self, dim_z, dim_u):
+        nn_width = 256 
         trans = nn.Sequential(
-            nn.Linear(dim_z, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(dim_z, nn_width),
+            nn.BatchNorm1d(nn_width),
             nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(nn_width, nn_width),
+            nn.BatchNorm1d(nn_width),
             nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.BatchNorm1d(256),
+            nn.Linear(nn_width, nn_width),
+            nn.BatchNorm1d(nn_width),
             nn.ReLU(),
-            nn.Linear(256, dim_z*2)
+            nn.Linear(nn_width, dim_z*2)
         )
         super(BallTransition, self).__init__(trans, dim_z, dim_u)
 
