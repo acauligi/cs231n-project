@@ -40,10 +40,10 @@ def get_ball_transition(dim_z, dim_u):
     nn_width = 200
     trans = nn.Sequential(
         nn.Linear(dim_z, nn_width),
-        # nn.BatchNorm1d(100),
+        nn.BatchNorm1d(nn_width),
         nn.ReLU(),
         nn.Linear(nn_width, nn_width),
-        # nn.BatchNorm1d(100),
+        nn.BatchNorm1d(nn_width),
         nn.ReLU(),
         nn.Linear(nn_width, dim_z*2)
     )
