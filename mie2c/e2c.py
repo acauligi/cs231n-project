@@ -179,26 +179,24 @@ class Transition(nn.Module):
 
 
 class LinearTransition(nn.Module):
-    # def __init__(self, A, B, o):
-    #     super().__init__()
-    #     self.A = A
-    #     self.B = B
-    #     self.o = o
-    def __init__(self, dim_z, dim_u, r, v, B, o):
+    def __init__(self, dim_z, dim_u, r, v, A, B, o, low_rank=True):
         super().__init__()
         self.dim_z = dim_z
         self.dim_u = dim_u
         self.r = r
         self.v = v
+        self.A = A
         self.B = B
         self.o = o
+        self.low_rank = low_rank
 
     def forward(self, h, Q, u):
-        # A = self.A
-        r = self.r
-        v = self.v
-        A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
-
+        if self.low_rank:
+          r = self.r
+          v = self.v
+          A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+        else:
+          A = self.A
         B = self.B
         o = self.o
 
@@ -212,33 +210,32 @@ class LinearTransition(nn.Module):
         return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
 
 class PWATransition(nn.Module):
-    # def __init__(self, mode_classifier, As, Bs, os):
-    #     super().__init__()
-    #     self.mode_classifier = mode_classifier
-    #     self.As = As
-    #     self.Bs = Bs
-    #     self.os = os
-    def __init__(self, dim_z, dim_u, mode_classifier, rs, vs, Bs, os):
+    def __init__(self, dim_z, dim_u, mode_classifier, rs, vs, As, Bs, os, low_rank=True):
         super().__init__()
         self.dim_z = dim_z
         self.dim_u = dim_u
         self.mode_classifier = mode_classifier
         self.rs = rs
         self.vs = vs
+        self.As = As
         self.Bs = Bs
         self.os = os
+        self.low_rank = low_rank
 
     def forward(self, h, Q, uu):
         # TODO: vectorize this
         d = torch.zeros_like(h)
         sample = torch.zeros(h.shape)
+        # TODO(acauligi): try adding l1-regularizatio on alpha
         alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
         Qz_next_cov = torch.zeros_like(Q.covariance_matrix)
         for mode in range(alpha.shape[1]):
-            # A = self.As[mode]
-            r = self.rs[mode]
-            v = self.vs[mode]
-            A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+            if self.low_rank:
+              r = self.rs[mode]
+              v = self.vs[mode]
+              A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+            else:
+              A = self.As[mode]
 
             B = self.Bs[mode]
             o = self.os[mode]
@@ -261,10 +258,12 @@ class PWATransition(nn.Module):
         alpha = (alpha == alpha.max(dim=1)[0].unsqueeze(1)).float()
         Qz_next_cov = torch.zeros_like(Q.covariance_matrix)
         for mode in range(alpha.shape[1]):
-            # A = self.As[mode]
-            r = self.rs[mode]
-            v = self.vs[mode]
-            A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+            if self.low_rank:
+              r = self.rs[mode]
+              v = self.vs[mode]
+              A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+            else:
+              A = self.As[mode]
 
             B = self.Bs[mode]
             o = self.os[mode]

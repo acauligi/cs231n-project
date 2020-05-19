@@ -51,28 +51,28 @@ def get_ball_transition(dim_z, dim_u):
     return Transition(trans, dim_z, dim_u)
 
 
-def get_ball_linear_transition(dim_z, dim_u):
-    # A = torch.nn.Parameter(2. * (torch.randn(dim_z, dim_z) - .5))
+def get_ball_linear_transition(dim_z, dim_u, low_rank=True):
+    A = torch.nn.Parameter(2. * (torch.randn(dim_z, dim_z) - .5))
     r = torch.nn.Parameter(2. * (torch.randn(dim_z) - .5))
     v = torch.nn.Parameter(2. * (torch.randn(dim_z) - .5))
     B = torch.nn.Parameter(2. * (torch.randn(dim_z, dim_u) - .5))
     o = torch.nn.Parameter(2. * (torch.randn(dim_z, 1) - .5))
 
-    return LinearTransition(dim_z, dim_u, r, v, B, o)
+    return LinearTransition(dim_z, dim_u, r, v, A, B, o, low_rank=low_rank)
 
 
-def get_ball_pwa_transition(num_modes, dim_z, dim_u):
+def get_ball_pwa_transition(num_modes, dim_z, dim_u, low_rank=True):
     mode_classifier = nn.Linear(dim_z, num_modes)
-    # As = []
+    As = []
     rs = []
     vs = []
     Bs = []
     os = []
     for mode in range(num_modes):
-        # As.append(torch.nn.Parameter(2. * (torch.randn(dim_z, dim_z) - .5)))
+        As.append(torch.nn.Parameter(2. * (torch.randn(dim_z, dim_z) - .5)))
         rs.append(torch.nn.Parameter(2. * (torch.randn(dim_z) - .5)))
         vs.append(torch.nn.Parameter(2. * (torch.randn(dim_z) - .5)))
         Bs.append(torch.nn.Parameter(2. * (torch.randn(dim_z, dim_u) - .5)))
         os.append(torch.nn.Parameter(2. * (torch.randn(dim_z, 1) - .5)))
 
-    return PWATransition(dim_z, dim_u, mode_classifier, rs, vs, Bs, os)
+    return PWATransition(dim_z, dim_u, mode_classifier, rs, vs, As, Bs, os, low_rank=low_rank)
