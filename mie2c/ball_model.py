@@ -58,7 +58,7 @@ def get_ball_linear_transition(dim_z, dim_u):
     B = torch.nn.Parameter(2. * (torch.randn(dim_z, dim_u) - .5))
     o = torch.nn.Parameter(2. * (torch.randn(dim_z, 1) - .5))
 
-    return LinearTransition(r, v, B, o)
+    return LinearTransition(dim_z, dim_u, r, v, B, o)
 
 
 def get_ball_pwa_transition(num_modes, dim_z, dim_u):
@@ -75,4 +75,4 @@ def get_ball_pwa_transition(num_modes, dim_z, dim_u):
         Bs.append(torch.nn.Parameter(2. * (torch.randn(dim_z, dim_u) - .5)))
         os.append(torch.nn.Parameter(2. * (torch.randn(dim_z, 1) - .5)))
 
-    return PWATransition(mode_classifier, rs, vs, Bs, os)
+    return PWATransition(dim_z, dim_u, mode_classifier, rs, vs, Bs, os)
