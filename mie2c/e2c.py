@@ -178,6 +178,89 @@ class Transition(nn.Module):
         return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
 
 
+class LinearTransition(nn.Module):
+    # def __init__(self, A, B, o):
+    #     super().__init__()
+    #     self.A = A
+    #     self.B = B
+    #     self.o = o
+    def __init__(self, r, v, B, o):
+        super().__init__()
+        self.r = r
+        self.v = v
+        self.B = B
+        self.o = o
+
+    def forward(self, h, Q, u):
+        # A = self.A
+        r = self.r
+        v = self.v
+        A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+
+        B = self.B
+        o = self.o
+                
+        d = Q.mu @ A.T + u @ B.T + o.T
+        sample = h @ A.T + u @ B.T + o.T
+
+        return sample, NormalDistribution(d, Q.sigma, Q.logsigma)
+
+
+class PWATransition(nn.Module):
+    # def __init__(self, mode_classifier, As, Bs, os):
+    #     super().__init__()
+    #     self.mode_classifier = mode_classifier
+    #     self.As = As
+    #     self.Bs = Bs
+    #     self.os = os
+    def __init__(self, mode_classifier, rs, vs, Bs, os):
+        super().__init__()
+        self.mode_classifier = mode_classifier
+        self.rs = rs
+        self.vs = vs
+        self.Bs = Bs
+        self.os = os
+
+    def forward(self, h, Q, u):
+        # TODO: vectorize this
+        d = torch.zeros(h.shape)
+        sample = torch.zeros(h.shape)
+        alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
+        for mode in range(alpha.shape[1]):
+            # A = self.As[mode]
+            r = self.rs[mode]
+            v = self.vs[mode]
+            A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+
+            B = self.Bs[mode]
+            o = self.os[mode]
+
+            d += (Q.mu @ A.T + u @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+            sample += (h @ A.T + u @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+
+        return sample, NormalDistribution(d, Q.sigma, Q.logsigma)
+
+    def predict(self, h, Q, u):
+        # TODO: vectorize this
+        d = torch.zeros(h.shape)
+        sample = torch.zeros(h.shape)
+        alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
+        alpha = (alpha == alpha.max(dim=1)[0].unsqueeze(1)).float()
+        for mode in range(alpha.shape[1]):
+            # A = self.As[mode]
+            r = self.rs[mode]
+            v = self.vs[mode]
+            A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+
+            B = self.Bs[mode]
+            o = self.os[mode]
+
+            d += (Q.mu @ A.T + u @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+            sample += (h @ A.T + u @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+
+        return sample, NormalDistribution(d, Q.sigma, Q.logsigma)      
+
+
 class E2C(nn.Module):
     def __init__(self, enc, trans, dec):
         """Constructor for BnBCNN.
@@ -244,8 +327,11 @@ class E2C(nn.Module):
 
     def predict(self, X, U):
         mean, logvar = self.encoder.eval()(X)
-        z, Qz = self.reparam(mean, logvar)        
-        z_next_pred, Qz_next_pred = self.trans.eval()(z, Qz, U)
+        z, Qz = self.reparam(mean, logvar)
+        if isinstance(self.trans, PWATransition):
+            z_next_pred, Qz_next_pred = self.trans.predict(z, Qz, U)
+        else:  
+            z_next_pred, Qz_next_pred = self.trans.eval()(z, Qz, U)
         x_next_dec = self.decoder.eval()(z_next_pred)
         return x_next_dec
 
