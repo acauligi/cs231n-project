@@ -3,51 +3,10 @@ from mie2c.losses import binary_crossentropy
 import torch
 from torch import nn
 from torch.autograd import Variable
+from torch import nn, distributions
 import numpy as np
 import copy
-
-
-class NormalDistribution:
-    """
-    Wrapper class representing a multivariate normal distribution parameterized by
-    N(mu,Cov). If cov. matrix is diagonal, Cov=(sigma).^2. Otherwise,
-    Cov=A*(sigma).^2*A', where A = (I+v*r^T).
-    """
-    def __init__(self, mu, sigma, logsigma, *, v=None, r=None):
-        self.mu = mu
-        self.sigma = sigma
-        self.logsigma = logsigma
-        self.v = v
-        self.r = r
-
-    @property
-    def cov(self):
-        """This should only be called when NormalDistribution represents one sample"""
-        if self.v is not None and self.r is not None:
-            assert self.v.dim() == 1
-            dim = self.v.dim()
-            v = self.v.unsqueeze(1)  # D * 1 vector
-            rt = self.r.unsqueeze(0)  # 1 * D vector
-            A = torch.eye(dim) + v.mm(rt)
-            return A.mm(torch.diag(self.sigma.pow(2)).mm(A.t()))
-        else:
-            return torch.diag(self.sigma.pow(2))
-
-
-def KLDGaussian(Q, N, eps=1e-8):
-    """KL Divergence between two Gaussians
-        Assuming Q ~ N(mu0, A sigma_0 A') where A = I + vr^{T}
-        and      N ~ N(mu1,  sigma_1 )
-    """
-    sum = lambda x: torch.sum(x, dim=1)
-    k = float(Q.mu.size()[1])  # dimension of distribution
-    mu0, v, r, mu1 = Q.mu, Q.v, Q.r, N.mu
-    s02, s12 = (Q.sigma).pow(2) + eps, (N.sigma).pow(2) + eps
-    a = sum(s02 * (1. + 2. * v * r) / s12) + sum(v.pow(2) / s12) * sum(r.pow(2) * s02)  # trace term
-    b = sum((mu1 - mu0).pow(2) / s12)  # difference-of-means term
-    c = 2. * (sum(N.logsigma - Q.logsigma) - torch.log(1. + sum(v * r) + eps))  # ratio-of-determinants term.
-    return 0.5 * (a + b - k + c)
-
+import pdb
 
 class Encoder(nn.Module):
     def __init__(self, dim_in, dim_z, channels, ff_shape, kernel, stride, padding, pool, conv_activation=None, ff_activation=None): 
@@ -170,7 +129,7 @@ class Decoder(nn.Module):
         x = x.view(N,C,W,H)
         for ii in range(0, len(self.conv_layers)):
             x = self.conv_layers[ii](x)
-            x = self.batch_norm_layers[ii](x)
+            # x = self.batch_norm_layers[ii](x)
             if self.conv_activation:
                 x = self.conv_activation(x)
         return x
@@ -189,31 +148,34 @@ class Transition(nn.Module):
 
     def forward(self, h, Q, u):
         batch_size = h.size()[0]
-        
+
         # computes the new basis vector for the embedded dynamics
         v, r = self.trans(h).chunk(2, dim=1)
         v1 = v.unsqueeze(2)
         rT = r.unsqueeze(1)
         I = Variable(torch.eye(self.dim_z).repeat(batch_size, 1, 1))
         if rT.data.is_cuda:
-            I.dada.cuda()
+            I = I.to(rT.device)
         # A is batch_size X z_size X z_size
         A = I.add(v1.bmm(rT))
         # B is batch_size X z_size X input_size
-        B = self.fc_B(h).view(-1, self.dim_z, self.dim_u)
+        if self.dim_u is not 0:
+          B = self.fc_B(h).view(-1, self.dim_z, self.dim_u)
+          u = u.unsqueeze(2)
         # o (constant terms) is batch_size X z_size
         o = self.fc_o(h).unsqueeze(2)
         # need to compute the parameters for distributions
         # as well as for the samples
-        u = u.unsqueeze(2)
-        
-        d = A.bmm(Q.mu.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
-        sample = A.bmm(h.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
-        
-        # TODO: update the latent distribution through the dynamics
-        # Qz_next_cov = A.bmm(Q.cov).bmm(A.transpose(1,2))
-        
-        return sample, NormalDistribution(d, Q.sigma, Q.logsigma, v=v, r=r)
+
+        if self.dim_u is not 0:
+          d = A.bmm(Q.mean.float().unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
+          sample = A.bmm(h.unsqueeze(2)).add(B.bmm(u)).add(o).squeeze(2)
+        else:
+          d = A.bmm(Q.mean.float().unsqueeze(2)).add(o).squeeze(2)
+          sample = A.bmm(h.unsqueeze(2)).add(o).squeeze(2)
+
+        Qz_next_cov = A.double().bmm(Q.covariance_matrix.double()).bmm(A.double().transpose(1,2))
+        return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
 
 
 class E2C(nn.Module):
@@ -238,6 +200,8 @@ class E2C(nn.Module):
         self.decoder = dec 
         self.trans = trans
 
+        self.prior = distributions.Normal(0, 1)
+
     def encode(self, x):
         mean, logvar = self.encoder(x)
         return mean, logvar
@@ -252,11 +216,15 @@ class E2C(nn.Module):
         std = logvar.mul(0.5).exp_()
         self.z_mean = mean
         self.z_sigma = std
-        eps = torch.FloatTensor(std.size()).normal_()
+        eps = self.prior.sample()
         if std.data.is_cuda:
-            eps.cuda()
-        eps = Variable(eps)
-        return eps.mul(std).add_(mean), NormalDistribution(mean, std, torch.log(std))
+          eps = eps.to(std.device)
+
+        cov = []
+        for _ in std:
+            cov.append(torch.diag(_))
+        cov = torch.stack(cov,dim=0)
+        return eps.mul(std).add_(mean), distributions.MultivariateNormal(mean.double(), cov.double())
 
     def forward(self, x, action, x_next):
         mean, logvar = self.encode(x)
@@ -281,7 +249,6 @@ class E2C(nn.Module):
         x_next_dec = self.decoder.eval()(z_next_pred)
         return x_next_dec
 
-
 def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
                  x, x_next,
                  Qz, Qz_next, Qz_next_pred):
@@ -289,18 +256,11 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
     x_reconst_loss = (x_dec - x).pow(2).sum(dim=[1,2,3])
     x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
 
-    logvar = Qz.logsigma.mul(2)
-    KLD_element = Qz.mu.pow(2).add_(logvar.exp()).mul_(-1).add_(1).add_(logvar)
-    KLD = torch.sum(KLD_element, dim=1).mul(-0.5)
+    prior = distributions.MultivariateNormal(torch.zeros_like(Qz.mean[0]).double(),torch.diag(torch.ones_like(Qz.mean[0])).double())
+    KLD = distributions.kl_divergence(Qz,prior) + distributions.kl_divergence(Qz_next,prior)
 
     # ELBO
-    bound_loss = x_reconst_loss + x_next_reconst_loss + KLD
+    bound_loss = x_reconst_loss.add(x_next_reconst_loss).double().add(KLD)
+    trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next) # .add(x_next_pre_reconst_loss)
 
-    kl = torch.zeros(bound_loss.shape[0])
-    for i in range(bound_loss.shape[0]):
-        # TODO: use the nondiagonal terms of the covariances
-        m1 = torch.distributions.MultivariateNormal(Qz_next_pred.mu[i,:], torch.diag(Qz_next_pred.sigma[i,:]))
-        m2 = torch.distributions.MultivariateNormal(Qz_next.mu[i,:], torch.diag(Qz_next.sigma[i,:]))
-        kl[i] = torch.distributions.kl.kl_divergence(m1, m2)
-
-    return bound_loss.mean(), kl.mean()
+    return bound_loss.mean()/2, trans_loss.mean()
