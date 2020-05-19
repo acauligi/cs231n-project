@@ -178,6 +178,108 @@ class Transition(nn.Module):
         return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
 
 
+class LinearTransition(nn.Module):
+    # def __init__(self, A, B, o):
+    #     super().__init__()
+    #     self.A = A
+    #     self.B = B
+    #     self.o = o
+    def __init__(self, dim_z, dim_u, r, v, B, o):
+        super().__init__()
+        self.dim_z = dim_z
+        self.dim_u = dim_u
+        self.r = r
+        self.v = v
+        self.B = B
+        self.o = o
+
+    def forward(self, h, Q, u):
+        # A = self.A
+        r = self.r
+        v = self.v
+        A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+
+        B = self.B
+        o = self.o
+
+        if self.dim_u is not 0:
+          d = Q.mean.float() @ A.T + u @ B.T + o.T
+          sample = h @ A.T + u @ B.T + o.T
+        else:
+          d = Q.mean.float() @ A.T + o.T
+          sample = h @ A.T + o.T
+        Qz_next_cov = A.double() @ Q.covariance_matrix @ A.double().T
+        return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
+
+class PWATransition(nn.Module):
+    # def __init__(self, mode_classifier, As, Bs, os):
+    #     super().__init__()
+    #     self.mode_classifier = mode_classifier
+    #     self.As = As
+    #     self.Bs = Bs
+    #     self.os = os
+    def __init__(self, dim_z, dim_u, mode_classifier, rs, vs, Bs, os):
+        super().__init__()
+        self.dim_z = dim_z
+        self.dim_u = dim_u
+        self.mode_classifier = mode_classifier
+        self.rs = rs
+        self.vs = vs
+        self.Bs = Bs
+        self.os = os
+
+    def forward(self, h, Q, uu):
+        # TODO: vectorize this
+        d = torch.zeros_like(h)
+        sample = torch.zeros(h.shape)
+        alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
+        Qz_next_cov = torch.zeros_like(Q.covariance_matrix)
+        for mode in range(alpha.shape[1]):
+            # A = self.As[mode]
+            r = self.rs[mode]
+            v = self.vs[mode]
+            A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+
+            B = self.Bs[mode]
+            o = self.os[mode]
+
+            if self.dim_u is not 0:
+              d += (Q.mean.float() @ A.T + uu @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+              sample += (h @ A.T + uu @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+            else:
+              d += (Q.mean.float() @ A.T + o.T) * alpha[:, mode].unsqueeze(1)
+              sample += (h @ A.T + o.T) * alpha[:, mode].unsqueeze(1)
+            A_local = alpha[:,mode].double().view(-1,1,1) * A.double()
+            Qz_next_cov += A_local @ Q.covariance_matrix.double() @ A_local.transpose(1,2)
+        return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
+
+    def predict(self, h, Q, u):
+        # TODO: vectorize this
+        d = torch.zeros_like(h)
+        sample = torch.zeros(h.shape)
+        alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
+        alpha = (alpha == alpha.max(dim=1)[0].unsqueeze(1)).float()
+        Qz_next_cov = torch.zeros_like(Q.covariance_matrix)
+        for mode in range(alpha.shape[1]):
+            # A = self.As[mode]
+            r = self.rs[mode]
+            v = self.vs[mode]
+            A = torch.eye(r.shape[0]) + r.unsqueeze(1) @ v.unsqueeze(0)
+
+            B = self.Bs[mode]
+            o = self.os[mode]
+
+            if self.dim_u is not 0:
+              d += (Q.mean.float() @ A.T + u @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+              sample += (h @ A.T + u @ B.T + o.T) * alpha[:, mode].unsqueeze(1)
+            else:
+              d += (Q.mean.float() @ A.T + o.T) * alpha[:, mode].unsqueeze(1)
+              sample += (h @ A.T + o.T) * alpha[:, mode].unsqueeze(1)
+            A_local = alpha[:,mode].double().view(-1,1,1) * A.double()
+            Qz_next_cov += A_local @ Q.covariance_matrix.double() @ A_local.transpose(1,2)
+        return sample, distributions.MultivariateNormal(d.double(), Qz_next_cov)
+
+
 class E2C(nn.Module):
     def __init__(self, enc, trans, dec):
         """Constructor for BnBCNN.
@@ -244,8 +346,11 @@ class E2C(nn.Module):
 
     def predict(self, X, U):
         mean, logvar = self.encoder.eval()(X)
-        z, Qz = self.reparam(mean, logvar)        
-        z_next_pred, Qz_next_pred = self.trans.eval()(z, Qz, U)
+        z, Qz = self.reparam(mean, logvar)
+        if isinstance(self.trans, PWATransition):
+            z_next_pred, Qz_next_pred = self.trans.predict(z, Qz, U)
+        else:  
+            z_next_pred, Qz_next_pred = self.trans.eval()(z, Qz, U)
         x_next_dec = self.decoder.eval()(z_next_pred)
         return x_next_dec
 
