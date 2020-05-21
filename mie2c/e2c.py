@@ -221,13 +221,13 @@ class PWATransition(nn.Module):
         self.Bs = Bs
         self.os = os
         self.low_rank = low_rank
+        self.temperature = torch.nn.Parameter(torch.ones(1))
 
     def forward(self, h, Q, uu):
         # TODO: vectorize this
         d = torch.zeros_like(h)
-        sample = torch.zeros(h.shape)
-        # TODO(acauligi): try adding l1-regularizatio on alpha
-        alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
+        sample = torch.zeros_like(h)
+        alpha = torch.nn.functional.softmax(self.mode_classifier(h * (1./(self.temperature.pow(2) + 1e-6))), dim=1)
         Qz_next_cov = torch.zeros_like(Q.covariance_matrix)
         for mode in range(alpha.shape[1]):
             if self.low_rank:
@@ -253,7 +253,7 @@ class PWATransition(nn.Module):
     def predict(self, h, Q, u):
         # TODO: vectorize this
         d = torch.zeros_like(h)
-        sample = torch.zeros(h.shape)
+        sample = torch.zeros_like(h)
         alpha = torch.nn.functional.softmax(self.mode_classifier(h), dim=1)
         alpha = (alpha == alpha.max(dim=1)[0].unsqueeze(1)).float()
         Qz_next_cov = torch.zeros_like(Q.covariance_matrix)
@@ -366,5 +366,5 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
     # ELBO
     bound_loss = x_reconst_loss.add(x_next_reconst_loss).double().add(KLD)
     trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next) # .add(x_next_pre_reconst_loss)
-
+    
     return bound_loss.mean()/2, trans_loss.mean()
