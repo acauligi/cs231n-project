@@ -89,8 +89,8 @@ class Decoder(nn.Module):
         # input dimension should be for conv input
         C, W, H = dim_out
         for ii in range(len(channels)-2, -1, -1):
-          W = int(1 + (W - kernel[ii] +2*padding[ii])/stride[ii])
-          H = int(1 + (H - kernel[ii] +2*padding[ii])/stride[ii])
+          W = int(1 + (W - kernel[ii] + 2*padding[ii])/stride[ii])
+          H = int(1 + (H - kernel[ii] + 2*padding[ii])/stride[ii])
 
         cnn_input_size = (channels[0],W,H)  # input image to conv portion set to 1 channel
 
