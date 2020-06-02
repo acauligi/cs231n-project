@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 def get_bounce_encoder(dim_in, dim_z): 
-    channels_enc = [3, 32, 32, 16, 16]
+    channels_enc = [6, 32, 32, 16, 16]
     ff_shape = [128, 128, 128]
 
     conv_activation = torch.nn.ReLU()
@@ -20,7 +20,7 @@ def get_bounce_encoder(dim_in, dim_z):
 
 
 def get_bounce_decoder(dim_in, dim_out): 
-    channels_dec = [3, 32, 32, 16, dim_out[0]]
+    channels_dec = [6, 32, 32, 16, dim_out[0]]
     ff_shape = [128, 128, 128]
 
     conv_activation = torch.nn.ReLU()
