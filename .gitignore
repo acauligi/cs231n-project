@@ -130,3 +130,6 @@ dmypy.json
 
 # config environment
 config/setup_environments.sh
+
+# data
+scripts/*.npy
