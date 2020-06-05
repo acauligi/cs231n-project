@@ -133,3 +133,6 @@ config/setup_environments.sh
 
 # data
 scripts/*.npy
+
+# OSX
+*.DS_Store

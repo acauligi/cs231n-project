@@ -1,0 +1,76 @@
+from mie2c.e2c import Encoder, Decoder, Transition, LinearTransition, PWATransition
+
+import torch
+from torch import nn
+
+def get_cartpole_encoder(dim_in, dim_z): 
+    channels_enc = [6, 32, 32, 16, 16]
+    ff_shape = [128, 128, 128]
+
+    conv_activation = torch.nn.ReLU()
+    ff_activation = torch.nn.ReLU()
+
+    n_channels = len(channels_enc) - 1
+    kernel_enc = [5, 3, 5, 3, 5] 
+    stride= [2, 1, 2, 1, 2]
+    padding= [2, 1, 2, 1, 2]
+    pool = [None, 2, None, 2, 2]
+
+    return Encoder(dim_in, dim_z, channels_enc, ff_shape, kernel_enc, stride, padding, pool, conv_activation=conv_activation, ff_activation=ff_activation)
+
+
+def get_cartpole_decoder(dim_in, dim_out): 
+    channels_dec = [6, 32, 32, 16, dim_out[0]]
+    ff_shape = [128, 128, 128]
+
+    conv_activation = torch.nn.ReLU()
+    ff_activation = torch.nn.ReLU()
+
+    n_channels = len(channels_dec) - 1
+    kernel_dec = [5, 3, 5, 3, 5] 
+    stride = [1, 1, 1, 1, 2]
+    padding = [2, 1, 2, 1, 2]
+
+    return Decoder(dim_in, dim_out, channels_dec, ff_shape, kernel_dec, stride, padding, ff_activation=ff_activation, conv_activation=conv_activation)
+
+
+def get_cartpole_transition(dim_z, dim_u):
+    nn_width = 32
+    trans = nn.Sequential(
+        nn.Linear(dim_z, nn_width),
+        nn.BatchNorm1d(nn_width),
+        nn.ReLU(),
+        nn.Linear(nn_width, nn_width),
+        nn.BatchNorm1d(nn_width),
+        nn.ReLU(),
+        nn.Linear(nn_width, dim_z*2)
+    )
+
+    return Transition(trans, dim_z, dim_u)
+
+
+def get_cartpole_linear_transition(dim_z, dim_u, low_rank=True):
+    A = torch.nn.Parameter(2. * (torch.randn(dim_z, dim_z) - .5))
+    r = torch.nn.Parameter(2. * (torch.randn(dim_z) - .5))
+    v = torch.nn.Parameter(2. * (torch.randn(dim_z) - .5))
+    B = torch.nn.Parameter(2. * (torch.randn(dim_z, dim_u) - .5))
+    o = torch.nn.Parameter(2. * (torch.randn(dim_z, 1) - .5))
+
+    return LinearTransition(dim_z, dim_u, r, v, A, B, o, low_rank=low_rank)
+
+
+def get_cartpole_pwa_transition(num_modes, dim_z, dim_u, low_rank=True):
+    mode_classifier = nn.Linear(dim_z, num_modes)
+    As = torch.nn.ParameterList()
+    rs = torch.nn.ParameterList()
+    vs = torch.nn.ParameterList()
+    Bs = torch.nn.ParameterList()
+    os = torch.nn.ParameterList()
+    for mode in range(num_modes):
+        As.append(torch.nn.Parameter(2. * (torch.randn(dim_z, dim_z) - .5)))
+        rs.append(torch.nn.Parameter(2. * (torch.randn(dim_z) - .5)))
+        vs.append(torch.nn.Parameter(2. * (torch.randn(dim_z) - .5)))
+        Bs.append(torch.nn.Parameter(2. * (torch.randn(dim_z, dim_u) - .5)))
+        os.append(torch.nn.Parameter(2. * (torch.randn(dim_z, 1) - .5)))
+
+    return PWATransition(dim_z, dim_u, mode_classifier, rs, vs, As, Bs, os, low_rank=low_rank)
