@@ -4,6 +4,7 @@ import torch
 from torch import nn
 from torch.autograd import Variable
 from torch import nn, distributions
+from torch.nn import functional as F
 import numpy as np
 import copy
 import pdb
@@ -359,8 +360,13 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
                  x, x_next,
                  Qz, Qz_next, Qz_next_pred):
 
-    x_reconst_loss = (x_dec - x).pow(2).sum(dim=[1,2,3])
-    x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
+    # # l2_norm
+    # x_reconst_loss = (x_dec - x).pow(2).sum(dim=[1,2,3])
+    # x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
+
+    # cross entropy loss
+    x_reconst_loss = F.binary_cross_entropy(nn.Sigmoid()(x_dec), nn.Sigmoid()(x), reduction='sum')
+    x_next_reconst_loss = F.binary_cross_entropy(nn.Sigmoid()(x_next_pred_dec), nn.Sigmoid()(x_next), reduction='sum')
 
     prior = distributions.MultivariateNormal(torch.zeros_like(Qz.mean[0]).double(),torch.diag(torch.ones_like(Qz.mean[0])).double())
     KLD = distributions.kl_divergence(Qz,prior) + distributions.kl_divergence(Qz_next,prior)
