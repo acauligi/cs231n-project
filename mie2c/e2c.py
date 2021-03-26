@@ -5,9 +5,12 @@ from torch import nn
 from torch.autograd import Variable
 from torch import nn, distributions
 from torch.nn import functional as F
+from torch.utils.tensorboard import SummaryWriter
 import numpy as np
 import copy
 import pdb
+import os
+
 
 class Encoder(nn.Module):
     def __init__(self, dim_in, dim_z, channels, ff_shape, kernel, stride, padding, pool, conv_activation=None, ff_activation=None): 
@@ -117,6 +120,8 @@ class Decoder(nn.Module):
         self.ff_activation = ff_activation
         self.conv_activation = conv_activation
 
+        self.sigmoid = torch.nn.Sigmoid()
+
     def forward(self, x):
         # First compute feedforward passes
         for ii in range(0,len(self.ff_layers)-1):
@@ -135,6 +140,7 @@ class Decoder(nn.Module):
             # x = self.batch_norm_layers[ii](x)
             if self.conv_activation:
                 x = self.conv_activation(x)
+        x = self.sigmoid(x)
         return x
 
 
@@ -356,23 +362,103 @@ class E2C(nn.Module):
         x_next_dec = self.decoder.eval()(z_next_pred)
         return x_next_dec
 
+
 def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
                  x, x_next,
-                 Qz, Qz_next, Qz_next_pred):
-
-    # # l2_norm
-    # x_reconst_loss = (x_dec - x).pow(2).sum(dim=[1,2,3])
-    # x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
-
-    # cross entropy loss
-    x_reconst_loss = F.binary_cross_entropy(nn.Sigmoid()(x_dec), nn.Sigmoid()(x), reduction='sum')
-    x_next_reconst_loss = F.binary_cross_entropy(nn.Sigmoid()(x_next_pred_dec), nn.Sigmoid()(x_next), reduction='sum')
+                 Qz, Qz_next, Qz_next_pred,
+                 use_l2=False):
+    if use_l2:
+        x_reconst_loss = (x_dec - x).pow(2).sum(dim=[1,2,3])
+        x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
+    else:
+        bce_loss = nn.BCELoss(reduction='mean')
+        x_reconst_loss = bce_loss(x_dec, x)
+        x_next_reconst_loss = bce_loss(x_next_pred_dec, x_next)
 
     prior = distributions.MultivariateNormal(torch.zeros_like(Qz.mean[0]).double(),torch.diag(torch.ones_like(Qz.mean[0])).double())
     KLD = distributions.kl_divergence(Qz,prior) + distributions.kl_divergence(Qz_next,prior)
 
     # ELBO
-    bound_loss = x_reconst_loss.add(x_next_reconst_loss).double().add(KLD).float()
-    trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next).float() # .add(x_next_pre_reconst_loss)
-    
+    bound_loss = x_reconst_loss.add(x_next_reconst_loss).double().add(KLD)
+    trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next) # .add(x_next_pre_reconst_loss)
+
+
     return bound_loss.mean()/2, trans_loss.mean()
+
+
+def train_vae(model, X, X_next, model_name, verbose=True, use_cuda=False,
+              num_epochs=20, batch_size=64, checkpoint_every=1,
+              savepoint_every=1, learning_rate=1e-3,
+              kl_lambda=lambda i: 1., temp_lambda=lambda i: 10., use_l2=False,
+              writer=None, itr=0):
+    if not os.path.exists('pytorch'):
+        os.makedirs('pytorch')
+    fn_pt_model = 'pytorch/{}.pt'.format(model_name)
+    dim_u = model.trans.dim_u
+
+    if writer is None:
+        writer = SummaryWriter()
+
+    if use_cuda:
+        dataset = torch.utils.data.TensorDataset(torch.tensor(X).float().to("cuda"), \
+                                                 torch.tensor(X_next).float().to("cuda"))
+        model = model.to("cuda")
+    else:
+        dataset = torch.utils.data.TensorDataset(torch.tensor(X).float(), \
+                                                 torch.tensor(X_next).float())
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
+
+    itr_per_epoch = float(X.shape[0]) / float(batch_size)
+
+    for epoch in range(num_epochs):
+        for x, x_next in dataloader:
+            optimizer.zero_grad()
+            action = torch.empty((x.shape[0], dim_u))
+
+            model(x, action, x_next)
+            elbo_loss, kl_loss = compute_loss(
+                model.x_dec, model.x_next_dec, model.x_next_pred_dec,
+                x, x_next, model.Qz, model.Qz_next, model.Qz_next_pred,
+                use_l2=use_l2)
+            kl_weight = kl_lambda(float(itr) / itr_per_epoch)
+            weighted_kl_loss = kl_weight * kl_loss
+            loss = elbo_loss + weighted_kl_loss
+            writer.add_scalar('Train/elbo_loss', elbo_loss.item(), itr)
+            writer.add_scalar('Train/kl_loss', kl_loss.item(), itr)
+            writer.add_scalar('Train/kl_weight', kl_weight.item(), itr)
+            writer.add_scalar('Train/weighted_kl_loss', weighted_kl_loss.item(), itr)
+            writer.add_scalar('Train/recon_loss', loss.item(), itr)
+
+            if isinstance(model.trans, PWATransition):
+                temp_weight = temp_lambda(float(itr) / itr_per_epoch)
+                temp_loss = model.trans.temperature.pow(2)[0]
+                weighted_temp_loss = temp_weight * temp_loss
+                writer.add_scalar(
+                    'Train/temp_weight', temp_weight.item(), itr)
+                writer.add_scalar(
+                    'Train/temp_loss', temp_loss.item(), itr)
+                writer.add_scalar(
+                    'Train/weighted_temp_loss', weighted_temp_loss.item(), itr)
+                loss += weighted_temp_loss
+
+            loss.backward()
+            optimizer.step()
+            writer.add_scalar('Train/loss', loss.item(), itr)
+            itr += 1
+
+        if epoch % checkpoint_every == 0:
+            print('Avg. loss: {}'.format(loss.item()))
+
+        if epoch % savepoint_every == 0:
+            torch.save(model.state_dict(), fn_pt_model)
+
+    if use_cuda:
+        model = model.to("cpu")
+        torch.cuda.empty_cache()
+    del dataset
+
+    torch.save(model.state_dict(), fn_pt_model)
+
+    return writer, itr
