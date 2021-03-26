@@ -372,8 +372,8 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
         x_next_reconst_loss = (x_next_pred_dec - x_next).pow(2).sum(dim=[1,2,3])
     else:
         bce_loss = nn.BCELoss(reduction='mean')
-        x_reconst_loss = bce_loss(torch.clamp(x_dec, 0., 1.), x)
-        x_next_reconst_loss = bce_loss(torch.clamp(x_next_pred_dec, 0., 1.), x_next)
+        x_reconst_loss = bce_loss(x_dec, x)
+        x_next_reconst_loss = bce_loss(x_next_pred_dec, x_next)
 
     prior = distributions.MultivariateNormal(torch.zeros_like(Qz.mean[0]).double(),torch.diag(torch.ones_like(Qz.mean[0])).double())
     KLD = distributions.kl_divergence(Qz,prior) + distributions.kl_divergence(Qz_next,prior)
