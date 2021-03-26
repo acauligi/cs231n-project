@@ -382,6 +382,7 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
     bound_loss = x_reconst_loss.add(x_next_reconst_loss).double().add(KLD)
     trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next) # .add(x_next_pre_reconst_loss)
 
+
     return bound_loss.mean()/2, trans_loss.mean()
 
 
