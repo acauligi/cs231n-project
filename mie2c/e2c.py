@@ -382,15 +382,13 @@ def compute_loss(x_dec, x_next_dec, x_next_pred_dec,
     bound_loss = x_reconst_loss.add(x_next_reconst_loss).double().add(KLD)
     trans_loss = distributions.kl_divergence(Qz_next_pred, Qz_next) # .add(x_next_pre_reconst_loss)
 
+    return bound_loss.mean().float()/2, trans_loss.mean().float()
 
-    return bound_loss.mean()/2, trans_loss.mean()
-
-
-def train_vae(model, X, X_next, model_name, verbose=True, use_cuda=False,
+def train_vae(model, X, U, X_next, model_name, verbose=True, use_cuda=False,
               num_epochs=20, batch_size=64, checkpoint_every=1,
               savepoint_every=1, learning_rate=1e-3,
               kl_lambda=lambda i: 1., temp_lambda=lambda i: 10., use_l2=False,
-              writer=None, itr=0):
+              writer=None, itr=0, device_id=0):
     if not os.path.exists('pytorch'):
         os.makedirs('pytorch')
     fn_pt_model = 'pytorch/{}.pt'.format(model_name)
@@ -400,12 +398,15 @@ def train_vae(model, X, X_next, model_name, verbose=True, use_cuda=False,
         writer = SummaryWriter()
 
     if use_cuda:
-        dataset = torch.utils.data.TensorDataset(torch.tensor(X).float().to("cuda"), \
-                                                 torch.tensor(X_next).float().to("cuda"))
-        model = model.to("cuda")
+        device = torch.device("cuda:{}".format(device_id))
+        dataset = torch.utils.data.TensorDataset(X.clone().float().to(device=device), \
+                                                 U.clone().float().to(device=device), \
+                                                 X_next.clone().float().to(device=device))
+        model = model.to(device=device)
     else:
-        dataset = torch.utils.data.TensorDataset(torch.tensor(X).float(), \
-                                                 torch.tensor(X_next).float())
+        dataset = torch.utils.data.TensorDataset(X.clone().float(), \
+                                                 U.clone().float(), \
+                                                 X_next.clone().float())
     dataloader = torch.utils.data.DataLoader(dataset, batch_size=batch_size, shuffle=True)
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
@@ -413,9 +414,8 @@ def train_vae(model, X, X_next, model_name, verbose=True, use_cuda=False,
     itr_per_epoch = float(X.shape[0]) / float(batch_size)
 
     for epoch in range(num_epochs):
-        for x, x_next in dataloader:
+        for x, action, x_next in dataloader:
             optimizer.zero_grad()
-            action = torch.empty((x.shape[0], dim_u))
 
             model(x, action, x_next)
             elbo_loss, kl_loss = compute_loss(

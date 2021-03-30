@@ -4,7 +4,7 @@ import torch
 from torch import nn
 
 def get_cartpole_encoder(dim_in, dim_z): 
-    channels_enc = [6, 32, 32, 16, 16]
+    channels_enc = [dim_in[0], 32, 32, 16, 16]
     ff_shape = [128, 128, 128]
 
     conv_activation = torch.nn.ReLU()
